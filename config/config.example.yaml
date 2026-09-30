@@ -1,0 +1,9 @@
+# Copy to config/config.yaml (gitignored) and fill in.
+deezer:
+  playlist_id: ""          # public Deezer playlist id (e.g. your Loved Tracks)
+local:
+  tree_file: data/raw/music-tree.txt   # output of `tree` on your music folder
+db_path: data/music_scout.db
+musicbrainz:
+  enabled: false
+  user_agent: "music_scout/0.1 (you@example.com)"

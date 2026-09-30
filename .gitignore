@@ -1,0 +1,17 @@
+# Personal data, secrets, local config — never commit
+data/
+*.db
+*.sqlite
+.env
+config/config.yaml
+taste_profile.md
+# Python / tooling
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+graphify-out/
+
+# monorepo-internal agent files
+CLAUDE.md
+.graphifyignore
