@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 
-from src import db, enrich, ingest_deezer, ingest_tree, profile, recommend_artists, recommend_curators
+from src import db, enrich, feedback, ingest_deezer, ingest_tree, profile, recommend_artists, recommend_curators
 
 
 def load_config(path):
@@ -48,6 +48,15 @@ def cmd_stats(conn):
     print("era distribution:")
     for era, n in q("SELECT COALESCE(era, '(unknown)'), COUNT(*) FROM tracks GROUP BY 1 ORDER BY 1"):
         print(f"  {era}: {n}")
+    print("feedback:", ", ".join(f"{t} {v}: {n}" for t, v, n in q(
+        "SELECT item_type, verdict, COUNT(*) FROM feedback GROUP BY 1, 2 ORDER BY 1, 2")) or "none")
+    counts = feedback.mode_counts(conn)
+    if counts and conn.execute("SELECT 1 FROM sqlite_master WHERE name='modes'").fetchone():
+        print("mode multipliers:")
+        for mid, name in q("SELECT mode_id, name FROM modes ORDER BY weight DESC"):
+            c = counts.get(mid, {})
+            print(f"  [{mid}] {name}: x{feedback.multiplier(c):.3f}  ({c.get('like', 0)} like, "
+                  f"{c.get('dislike', 0)} dislike, {c.get('known', 0)} known)")
 
 
 def cmd_enrich(conn, cfg, limit):
@@ -103,6 +112,21 @@ def cmd_curators(conn, cfg, args):
                   f"  overlap={ov:.0%} novelty={nov:.0%}  {link}")
 
 
+def cmd_feedback(conn, args):
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='mode_artists'").fetchone():
+        sys.exit("No listening modes yet: run `profile` first.")
+    if args.action == "rate":
+        if not (args.item_type and args.item_id and args.verdict):
+            sys.exit("usage: feedback rate <artist|curator|playlist> <id> <like|dislike|known>")
+        try:
+            mid = feedback.rate(conn, args.item_type, args.item_id, args.verdict, fetch=not args.no_lookup)
+        except ValueError as e:
+            sys.exit(str(e))
+        print(f"saved {args.item_type} {int(args.item_id)} = {args.verdict} (mode {mid if mid is not None else '?'})")
+    else:
+        feedback.loop(conn, args.type, args.n, fetch=not args.no_lookup)
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="music_scout", description="Taste profiler + music/curator recommender.")
     p.add_argument("--config", default="config/config.yaml")
@@ -122,6 +146,14 @@ def main(argv=None):
     rec.add_argument("--max-playlists", type=int, default=150, help="curators/playlists: max candidate playlists")
     rec.add_argument("--users-only", action="store_true", help="curators/playlists: exclude Deezer editorial creators")
     rec.add_argument("--no-lookup", action="store_true", help="skip Deezer name/fan lookup")
+    fb = sub.add_parser("feedback", help="rate suggestions (interactive) or `feedback rate <type> <id> <verdict>`")
+    fb.add_argument("action", nargs="?", default="loop", choices=["loop", "rate"])
+    fb.add_argument("item_type", nargs="?", choices=sorted(feedback.TYPES.values()))
+    fb.add_argument("item_id", nargs="?")
+    fb.add_argument("verdict", nargs="?", choices=sorted(feedback.VERDICTS.values()))
+    fb.add_argument("--type", default="mixed", choices=["artists", "curators", "playlists", "mixed"])
+    fb.add_argument("-n", type=int, default=10, help="number of suggestions to rate")
+    fb.add_argument("--no-lookup", action="store_true", help="skip Deezer lookups (names, seed related artists)")
     args = p.parse_args(argv)
 
     cfg = load_config(args.config)
@@ -134,6 +166,8 @@ def main(argv=None):
         cmd_enrich(conn, cfg, args.limit)
     elif args.cmd == "profile":
         cmd_profile(conn, args.out, args.force)
+    elif args.cmd == "feedback":
+        cmd_feedback(conn, args)
     elif args.cmd == "recommend":
         cmd_recommend(conn, cfg, args)
     else:

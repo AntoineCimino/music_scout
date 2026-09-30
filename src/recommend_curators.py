@@ -9,6 +9,7 @@ Per playlist (first `pages` x 100 tracks):
   score   = overlap * (1 - |novelty - NOVELTY_TARGET|) * size_penalty
   size_penalty = min(1, sqrt(BIG / nb_tracks)): huge "generic" dumps rank lower.
   diversity    = min(1, distinct_artists / MIN_ARTISTS): single-artist discographies are not curation.
+  feedback     = x mode multiplier from rated suggestions (see src/feedback.py).
 Candidate playlists are taken round-robin across modes so the cap never starves smaller modes.
 Curator score = best playlist score * (1 + 0.1 * (n_matching_playlists - 1)), bonus capped at +30%.
 """
@@ -20,7 +21,7 @@ from collections import defaultdict
 
 import requests
 
-from src import enrich, recommend_artists
+from src import enrich, feedback, recommend_artists
 
 NOVELTY_TARGET, BIG, MIN_TRACKS, MIN_ARTISTS = 0.6, 200, 10, 8
 
@@ -86,7 +87,11 @@ def run(conn, own_playlist_id=None, max_playlists=150, per_query=25, pages=1, se
               file=sys.stderr)
     lib_tracks = {r[0] for r in conn.execute("SELECT deezer_id FROM tracks WHERE deezer_id IS NOT NULL")}
     lib_artists = {r[0] for r in conn.execute("SELECT DISTINCT deezer_artist_id FROM tracks WHERE deezer_artist_id IS NOT NULL")}
-    known = lib_artists | set(recommend_artists.score(conn))
+    # liked/known artists: excluded from candidate scoring, still "our sound" (with or without a resolved mode)
+    seeds = {int(i) for i, in conn.execute("SELECT item_id FROM feedback WHERE item_type='artist'"
+                                           " AND verdict IN ('like', 'known')") if str(i).isdigit()}
+    known = lib_artists | set(recommend_artists.score(conn)) | seeds
+    mult = feedback.multipliers(conn)
 
     per_mode = []
     for mid, qs in queries(conn).items():
@@ -113,7 +118,7 @@ def run(conn, own_playlist_id=None, max_playlists=150, per_query=25, pages=1, se
             continue
         overlap, novelty, s = score_playlist(tracks, lib_tracks, lib_artists, known)
         nb = p.get("nb_tracks") or len(tracks)
-        s *= min(1.0, math.sqrt(BIG / nb)) * min(1.0, len({t['artist']['id'] for t in tracks}) / MIN_ARTISTS)
+        s *= min(1.0, math.sqrt(BIG / nb)) * min(1.0, len({t['artist']['id'] for t in tracks}) / MIN_ARTISTS) * mult.get(mid, 1.0)
         conn.execute("INSERT INTO playlists VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                      (pid, p.get("title"), p.get("link"), nb, creator.get("id"), creator.get("name"),
                       is_editorial(creator), mid, overlap, novelty, s))

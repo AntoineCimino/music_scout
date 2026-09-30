@@ -4,20 +4,27 @@ from collections import defaultdict
 
 import requests
 
-from src import enrich
+from src import enrich, feedback
 
 
-def score(conn):
+def score(conn, exclude_rated=True):
     """Returns {candidate_id: {"total": float, "modes": {mode_id: float}, "from": {lib_id: float}, "from_mode": {mode_id: {lib_id: float}}}}.
 
     Per mode: sum over library artists a in the mode with edge a->c of 1/(rank+1) * share(a in mode),
-    then * mode weight. Library artists and any artist with feedback are excluded.
+    then * effective mode weight (weight x feedback multiplier). Liked/known artists attributed to a
+    mode act as extra seeds there with share = seed weight / n mode artists. Library artists and
+    (unless exclude_rated=False) any artist with feedback are excluded.
     """
     library = {r[0] for r in conn.execute("SELECT DISTINCT deezer_artist_id FROM tracks WHERE deezer_artist_id IS NOT NULL")}
     # feedback writers store str(int(artist_id)); anything non-numeric is ignored
     rated = {int(r[0]) for r in conn.execute("SELECT item_id FROM feedback WHERE item_type='artist'")
-             if str(r[0]).strip().isdigit()}
-    weight = dict(conn.execute("SELECT mode_id, weight FROM modes"))
+             if str(r[0]).strip().isdigit()} if exclude_rated else set()
+    mult = feedback.multipliers(conn)
+    weight = {m: w * mult.get(m, 1.0) for m, w in conn.execute("SELECT mode_id, weight FROM modes")}
+    seeds = feedback.seeds(conn)
+    known = {a for s in seeds.values() for a, w in s.items() if w == 1.0}
+    if exclude_rated:  # attribution (exclude_rated=False) must still see known artists as candidates
+        library |= known
     counts = dict(conn.execute("SELECT deezer_artist_id, COUNT(*) FROM tracks WHERE deezer_artist_id IS NOT NULL GROUP BY 1"))
     members = defaultdict(list)
     for mid, aid in conn.execute("SELECT mode_id, artist_id FROM mode_artists"):
@@ -34,6 +41,15 @@ def score(conn):
             share = counts.get(a, 0) / mode_tracks
             for c, rank in related[a]:
                 s = share / (rank + 1) * weight.get(mid, 0.0)
+                out[c]["total"] += s
+                out[c]["modes"][mid] += s
+                out[c]["from"][a] += s
+                out[c]["from_mode"][mid][a] += s
+        for a, sw in seeds.get(mid, {}).items():
+            for c, rank in related[a]:
+                if c == a:
+                    continue
+                s = sw / max(len(arts), 1) / (rank + 1) * weight.get(mid, 0.0)
                 out[c]["total"] += s
                 out[c]["modes"][mid] += s
                 out[c]["from"][a] += s
@@ -69,7 +85,8 @@ def recommend(conn, top_n=20, per_mode=5, fetch=True, session=requests):
     if fetch:
         lookup(conn, wanted, session=session)
     names = {i: (n, f) for i, n, f in conn.execute("SELECT id, name, nb_fan FROM candidate_artists")}
-    lib_names = dict(conn.execute("SELECT id, name FROM artists"))
+    lib_names = {**{i: n for i, n, _ in conn.execute("SELECT * FROM candidate_artists")},
+                 **dict(conn.execute("SELECT id, name FROM artists"))}
 
     def rec(c, s, contrib):
         src = sorted(contrib.items(), key=lambda kv: (-kv[1], kv[0]))[:3]
