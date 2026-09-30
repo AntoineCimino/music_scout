@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 
-from src import db, ingest_deezer, ingest_tree
+from src import db, enrich, ingest_deezer, ingest_tree
 
 
 def load_config(path):
@@ -38,6 +38,23 @@ def cmd_stats(conn):
     print(f"  in several sources: {both[0][0]}")
     for era, n in q("SELECT COALESCE(era, genre_hint, '(none)'), COUNT(*) FROM tracks GROUP BY 1 ORDER BY 1"):
         print(f"  era/genre {era}: {n}")
+    total = q("SELECT COUNT(*), COUNT(deezer_id) FROM tracks")[0]
+    print(f"resolved on Deezer: {total[1]}/{total[0]} ({100 * total[1] / max(total[0], 1):.1f}%)")
+    print(f"artists enriched: {q('SELECT COUNT(*) FROM artists')[0][0]}, related edges: {q('SELECT COUNT(*) FROM artist_related')[0][0]}")
+    print("top genres (tracks):")
+    for g, n in q("SELECT g.genre, COUNT(DISTINCT t.id) FROM tracks t JOIN album_genres g ON g.album_id = t.deezer_album_id"
+                  " GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 15"):
+        print(f"  {g}: {n}")
+    print("era distribution:")
+    for era, n in q("SELECT COALESCE(era, '(unknown)'), COUNT(*) FROM tracks GROUP BY 1 ORDER BY 1"):
+        print(f"  {era}: {n}")
+
+
+def cmd_enrich(conn, cfg, limit):
+    if (cfg.get("musicbrainz") or {}).get("enabled"):
+        print("musicbrainz: deferred, not implemented yet (Deezer genres used)")
+    res = enrich.enrich(conn, limit=limit)
+    print(", ".join(f"{k}: {v}" for k, v in res.items()))
 
 
 def main(argv=None):
@@ -46,6 +63,8 @@ def main(argv=None):
     sub = p.add_subparsers(dest="cmd", required=True)
     ing = sub.add_parser("ingest", help="ingest liked tracks (idempotent)")
     ing.add_argument("source", nargs="?", default="all", choices=["all", "deezer", "local"])
+    en = sub.add_parser("enrich", help="resolve local tracks, related artists, album genres/year (cached)")
+    en.add_argument("--limit", type=int, help="max new HTTP fetches this run")
     sub.add_parser("stats", help="counts per source and era")
     args = p.parse_args(argv)
 
@@ -55,6 +74,8 @@ def main(argv=None):
     conn = db.connect(db_path)
     if args.cmd == "ingest":
         cmd_ingest(conn, cfg, args.source)
+    elif args.cmd == "enrich":
+        cmd_enrich(conn, cfg, args.limit)
     else:
         cmd_stats(conn)
 

@@ -17,6 +17,14 @@ CREATE TABLE IF NOT EXISTS track_sources (
     source_ref TEXT NOT NULL,          -- deezer track id or local relative path
     PRIMARY KEY (source, source_ref)
 );
+CREATE TABLE IF NOT EXISTS http_cache (url TEXT PRIMARY KEY, json TEXT NOT NULL, fetched_at INTEGER);
+CREATE TABLE IF NOT EXISTS artists (id INTEGER PRIMARY KEY, name TEXT, nb_fan INTEGER);
+CREATE TABLE IF NOT EXISTS artist_related (
+    artist_id INTEGER NOT NULL, related_id INTEGER NOT NULL, rank INTEGER NOT NULL,
+    PRIMARY KEY (artist_id, related_id)
+);
+CREATE TABLE IF NOT EXISTS albums (id INTEGER PRIMARY KEY, title TEXT, year INTEGER);
+CREATE TABLE IF NOT EXISTS album_genres (album_id INTEGER NOT NULL, genre TEXT NOT NULL, PRIMARY KEY (album_id, genre));
 """
 
 
