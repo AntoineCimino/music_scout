@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 
-from src import db, enrich, ingest_deezer, ingest_tree, profile, recommend_artists
+from src import db, enrich, ingest_deezer, ingest_tree, profile, recommend_artists, recommend_curators
 
 
 def load_config(path):
@@ -70,9 +70,11 @@ def cmd_profile(conn, out, force):
     print(f"written: {out}")
 
 
-def cmd_recommend(conn, args):
+def cmd_recommend(conn, cfg, args):
     if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='mode_artists'").fetchone():
         sys.exit("No listening modes yet: run `profile` first.")
+    if args.kind in ("curators", "playlists"):
+        return cmd_curators(conn, cfg, args)
     top, per_mode, modes = recommend_artists.recommend(conn, args.top, args.per_mode, fetch=not args.no_lookup)
     fmt = lambda r: (f"{r['name'] or '#' + str(r['id'])}  score={r['score']:.4f}"
                      + (f"  fans={r['nb_fan']}" if r["nb_fan"] is not None else "")
@@ -84,6 +86,21 @@ def cmd_recommend(conn, args):
         print(f"\n[{mid}] {modes[mid]}:")
         for r in recs:
             print(f"  - {fmt(r)}")
+
+
+def cmd_curators(conn, cfg, args):
+    own = str((cfg.get("deezer") or {}).get("playlist_id") or "") or None
+    n = recommend_curators.run(conn, own, max_playlists=args.max_playlists)
+    print(f"{n} playlists scored")
+    tag = lambda ed: "editorial" if ed else "user"
+    if args.kind == "playlists":
+        for i, r in enumerate(recommend_curators.top_playlists(conn, args.top, args.users_only), 1):
+            print(f"{i:2}. {r[1]} by {r[5]} ({tag(r[6])})  [{r[11]}]  overlap={r[8]:.0%} novelty={r[9]:.0%}"
+                  f" tracks={r[3]} score={r[10]:.3f}  {r[2]}")
+    else:
+        for i, (cid, name, ed, n_pl, sc, title, link, ov, nov, mode) in enumerate(recommend_curators.top_curators(conn, args.top, args.users_only), 1):
+            print(f"{i:2}. {name} ({tag(ed)}, {n_pl} playlists) score={sc:.3f}  [{mode}]  best: {title}"
+                  f"  overlap={ov:.0%} novelty={nov:.0%}  {link}")
 
 
 def main(argv=None):
@@ -99,9 +116,11 @@ def main(argv=None):
     pr.add_argument("--out", default="data/taste_profile.md")
     pr.add_argument("--force", action="store_true", help="overwrite an existing profile file")
     rec = sub.add_parser("recommend", help="recommendations from listening modes")
-    rec.add_argument("kind", choices=["artists"])
+    rec.add_argument("kind", choices=["artists", "curators", "playlists"])
     rec.add_argument("--top", type=int, default=20, help="overall top N")
     rec.add_argument("--per-mode", type=int, default=5, help="top K per mode")
+    rec.add_argument("--max-playlists", type=int, default=150, help="curators/playlists: max candidate playlists")
+    rec.add_argument("--users-only", action="store_true", help="curators/playlists: exclude Deezer editorial creators")
     rec.add_argument("--no-lookup", action="store_true", help="skip Deezer name/fan lookup")
     args = p.parse_args(argv)
 
@@ -116,7 +135,7 @@ def main(argv=None):
     elif args.cmd == "profile":
         cmd_profile(conn, args.out, args.force)
     elif args.cmd == "recommend":
-        cmd_recommend(conn, args)
+        cmd_recommend(conn, cfg, args)
     else:
         cmd_stats(conn)
 
