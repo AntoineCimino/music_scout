@@ -1,1 +1,2 @@
-# Add dependencies here
+requests
+PyYAML

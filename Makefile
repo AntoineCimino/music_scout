@@ -7,4 +7,4 @@ test:
 	pytest tests/ -v
 
 run:
-	python -m src.cli --help
+	python -m src.cli stats
