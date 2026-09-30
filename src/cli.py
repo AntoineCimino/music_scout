@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 
-from src import db, enrich, ingest_deezer, ingest_tree
+from src import db, enrich, ingest_deezer, ingest_tree, profile
 
 
 def load_config(path):
@@ -57,6 +57,19 @@ def cmd_enrich(conn, cfg, limit):
     print(", ".join(f"{k}: {v}" for k, v in res.items()))
 
 
+def cmd_profile(conn, out, force):
+    out = Path(out)
+    if out.exists() and not force:
+        sys.exit(f"{out} exists (may hold your edits). Re-run with --force to overwrite.")
+    out.parent.mkdir(parents=True, exist_ok=True)  # fail before touching the DB or calling the LLM
+    md, stats, summaries, names = profile.build(conn)
+    out.write_text(md)
+    print(f"{stats['tracks']} tracks, {stats['artists']} artists -> {len(summaries)} listening modes")
+    for mid, s in summaries.items():
+        print(f"  {mid}. {names[mid][0]} ({s['weight']:.0%}): {', '.join(s['top_artists'][:4])}")
+    print(f"written: {out}")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="music_scout", description="Taste profiler + music/curator recommender.")
     p.add_argument("--config", default="config/config.yaml")
@@ -66,6 +79,9 @@ def main(argv=None):
     en = sub.add_parser("enrich", help="resolve local tracks, related artists, album genres/year (cached)")
     en.add_argument("--limit", type=int, help="max new HTTP fetches this run")
     sub.add_parser("stats", help="counts per source and era")
+    pr = sub.add_parser("profile", help="taste stats + listening modes -> data/taste_profile.md")
+    pr.add_argument("--out", default="data/taste_profile.md")
+    pr.add_argument("--force", action="store_true", help="overwrite an existing profile file")
     args = p.parse_args(argv)
 
     cfg = load_config(args.config)
@@ -76,6 +92,8 @@ def main(argv=None):
         cmd_ingest(conn, cfg, args.source)
     elif args.cmd == "enrich":
         cmd_enrich(conn, cfg, args.limit)
+    elif args.cmd == "profile":
+        cmd_profile(conn, args.out, args.force)
     else:
         cmd_stats(conn)
 
