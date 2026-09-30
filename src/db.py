@@ -23,6 +23,12 @@ CREATE TABLE IF NOT EXISTS artist_related (
     artist_id INTEGER NOT NULL, related_id INTEGER NOT NULL, rank INTEGER NOT NULL,
     PRIMARY KEY (artist_id, related_id)
 );
+-- non-library artists looked up for recommendations; kept apart so library stats stay clean
+CREATE TABLE IF NOT EXISTS candidate_artists (id INTEGER PRIMARY KEY, name TEXT, nb_fan INTEGER);
+CREATE TABLE IF NOT EXISTS feedback (
+    item_type TEXT NOT NULL, item_id TEXT NOT NULL, verdict TEXT NOT NULL, ts INTEGER,
+    PRIMARY KEY (item_type, item_id)
+);
 CREATE TABLE IF NOT EXISTS albums (id INTEGER PRIMARY KEY, title TEXT, year INTEGER);
 CREATE TABLE IF NOT EXISTS album_genres (album_id INTEGER NOT NULL, genre TEXT NOT NULL, PRIMARY KEY (album_id, genre));
 """

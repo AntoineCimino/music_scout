@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 
-from src import db, enrich, ingest_deezer, ingest_tree, profile
+from src import db, enrich, ingest_deezer, ingest_tree, profile, recommend_artists
 
 
 def load_config(path):
@@ -70,6 +70,22 @@ def cmd_profile(conn, out, force):
     print(f"written: {out}")
 
 
+def cmd_recommend(conn, args):
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='mode_artists'").fetchone():
+        sys.exit("No listening modes yet: run `profile` first.")
+    top, per_mode, modes = recommend_artists.recommend(conn, args.top, args.per_mode, fetch=not args.no_lookup)
+    fmt = lambda r: (f"{r['name'] or '#' + str(r['id'])}  score={r['score']:.4f}"
+                     + (f"  fans={r['nb_fan']}" if r["nb_fan"] is not None else "")
+                     + f"  - because you like {', '.join(r['because'])}")
+    print(f"Top {len(top)} artists overall:")
+    for i, r in enumerate(top, 1):
+        print(f"  {i:2}. {fmt(r)}")
+    for mid, recs in per_mode.items():
+        print(f"\n[{mid}] {modes[mid]}:")
+        for r in recs:
+            print(f"  - {fmt(r)}")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="music_scout", description="Taste profiler + music/curator recommender.")
     p.add_argument("--config", default="config/config.yaml")
@@ -82,6 +98,11 @@ def main(argv=None):
     pr = sub.add_parser("profile", help="taste stats + listening modes -> data/taste_profile.md")
     pr.add_argument("--out", default="data/taste_profile.md")
     pr.add_argument("--force", action="store_true", help="overwrite an existing profile file")
+    rec = sub.add_parser("recommend", help="recommendations from listening modes")
+    rec.add_argument("kind", choices=["artists"])
+    rec.add_argument("--top", type=int, default=20, help="overall top N")
+    rec.add_argument("--per-mode", type=int, default=5, help="top K per mode")
+    rec.add_argument("--no-lookup", action="store_true", help="skip Deezer name/fan lookup")
     args = p.parse_args(argv)
 
     cfg = load_config(args.config)
@@ -94,6 +115,8 @@ def main(argv=None):
         cmd_enrich(conn, cfg, args.limit)
     elif args.cmd == "profile":
         cmd_profile(conn, args.out, args.force)
+    elif args.cmd == "recommend":
+        cmd_recommend(conn, args)
     else:
         cmd_stats(conn)
 
